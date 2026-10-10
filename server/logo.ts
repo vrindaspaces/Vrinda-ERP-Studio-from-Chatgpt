@@ -1,0 +1,21 @@
+import assets from './assets.generated';
+const json=(body:any,status=200)=>Response.json(body,{status,headers:{'Cache-Control':'no-store'}});
+export function imageType(bytes:Uint8Array,preview=false){
+ if(bytes.length>8&&[137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v))return 'image/png';
+ if(bytes.length>3&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255)return 'image/jpeg';
+ if(bytes.length>12&&new TextDecoder().decode(bytes.slice(0,4))==='RIFF'&&new TextDecoder().decode(bytes.slice(8,12))==='WEBP')return 'image/webp';
+ if(preview&&bytes.length>6&&['GIF87a','GIF89a'].includes(new TextDecoder().decode(bytes.slice(0,6))))return 'image/gif';
+ if(preview&&bytes.length>12&&new TextDecoder().decode(bytes.slice(4,8))==='ftyp'&&['avif','avis'].includes(new TextDecoder().decode(bytes.slice(8,12))))return 'image/avif';
+ return '';
+}
+export async function companyLogo(request:Request,env:any,actor:any){
+ if(request.method==='GET'){const row=(await env.DB.prepare("SELECT value FROM erp_collections WHERE key='companyProfile'").all()).results[0];const profile=JSON.parse(row.value);if(profile.logoHidden)return new Response(null,{status:404,headers:{'Cache-Control':'no-store'}});if(new URL(request.url).searchParams.get('header')==='1'&&profile.logoBrandVersion!=='gold-emblem-v1'){const asset=assets['/brand/vrinda-gold-emblem.png'];if(!asset?.body)return new Response(null,{status:404,headers:{'Cache-Control':'no-store'}});return new Response(Uint8Array.from(atob(asset.body),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/png','Cache-Control':'no-store'}});}const logo=profile.logoId;if(!logo)return new Response(null,{status:404});const object=await env.FILES?.get('logos/'+logo);if(!object?.body)return new Response(null,{status:404});return new Response(object.body,{headers:{'Content-Type':object.httpMetadata?.contentType||'image/png','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});}
+ if(!actor)return json({error:'Please sign in.'},401);if(actor.role!=='Owner')return json({error:'Only the Owner can change the company logo.'},403);
+ if(request.method==='DELETE'){for(let attempt=0;attempt<5;attempt++){const row=(await env.DB.prepare("SELECT value,revision FROM erp_collections WHERE key='companyProfile'").all()).results[0];const profile=JSON.parse(row.value),oldLogo=profile.logoId;const value={...profile,logoHidden:true};delete value.logoId;const result=await env.DB.prepare("UPDATE erp_collections SET value=?,revision=revision+1 WHERE key='companyProfile' AND revision=?").bind(JSON.stringify(value),row.revision).run();if(result.meta.changes){if(oldLogo&&env.FILES)try{await env.FILES.delete('logos/'+oldLogo);}catch{console.error('Unused company logo cleanup failed');}return json({success:true});}}return json({error:'Company details changed. Please retry.'},409);}
+ if(request.method!=='POST')return json({error:'Method not allowed'},405);if(!env.FILES)return json({error:'Logo storage unavailable.'},503);
+ if(Number(request.headers.get('content-length'))>3*1024*1024)return json({error:'Choose a logo no larger than 2 MB.'},413);
+ const form=await request.formData();const file=form.get('file');if(!(file instanceof File)||!file.size||file.size>2*1024*1024)return json({error:'Choose a PNG, JPEG or WebP logo no larger than 2 MB.'},400);
+ const bytes=new Uint8Array(await file.arrayBuffer());const type=imageType(bytes);if(!type)return json({error:'Choose a PNG, JPEG or WebP image.'},400);
+ const id=crypto.randomUUID();await env.FILES.put('logos/'+id,bytes,{httpMetadata:{contentType:type}});let saved=false;
+ try{for(let attempt=0;attempt<5;attempt++){const row=(await env.DB.prepare("SELECT value,revision FROM erp_collections WHERE key='companyProfile'").all()).results[0];const value={...JSON.parse(row.value),logoId:id,logoBrandVersion:'gold-emblem-v1',logoHidden:false};const result=await env.DB.prepare("UPDATE erp_collections SET value=?,revision=revision+1 WHERE key='companyProfile' AND revision=?").bind(JSON.stringify(value),row.revision).run();if(result.meta.changes){saved=true;return json({success:true,logoId:id});}}return json({error:'Company details changed. Please retry.'},409);}finally{if(!saved)await env.FILES.delete('logos/'+id);}
+}

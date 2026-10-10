@@ -1,0 +1,7 @@
+{
+  "name": "Vrinda Spaces LLP - Interior Design ERP",
+  "description": "Comprehensive enterprise ERP for residential interior design: client & project tracking, site task management, trade workforce, HRMS & payslips, procurement with partial receipts, GST quotations and invoicing, inventory, and P&L financial reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
